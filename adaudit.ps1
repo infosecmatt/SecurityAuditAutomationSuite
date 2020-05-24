@@ -81,79 +81,121 @@ function AuditAD() {
       echo "AD Functional Level: $ADFunctionalLevel"  
       $ADRootDSE = Get-ADRootDSE
       echo "Root of directory information server tree:"  
-      $ADRootDSE  
+      $ADRootDSE
       $ADTrust = Get-ADTrust -Filter *
+      echo "List of trusted objects for the domain:"
+      $ADTrust
 
-      #Group Policies
+
+      #Password and Group Policies
+      NewReportSection
+      echo "Password and Group Policies"
+      echo "-------------------------------------------------"  
       echo "Default Domain Password Policy: "  
-      Get-ADDefaultDomainPasswordPolicy  
-      echo ""  
+      Get-ADDefaultDomainPasswordPolicy
       echo "Password Policy for the Current User: "  
-      Get-ADUserResultantPasswordPolicy -Identity $env:USERDOMAIN + '\' + $env:USERNAME  
-      echo ''  
+      Get-ADUserResultantPasswordPolicy -Identity $("$env:USERNAME")
       Get-GPOReport -All -ReportType HTML -Path "$outpath\GPOReportsAll.html"
       Get-GPOReport -All -ReportType XML -Path "$outpath\GPOReportsAll.xml"
+      echo "Group policies exported to $outpath\GPOReportsAll.html."
 
       #All AD Users
+      NewReportSection
+      echo "Active Directory User Information"
+      echo "-------------------------------------------------"  
       $TotalUserList = Get-ADUser -filter *
       $TotalUserCount = ($TotalUserList | Measure-Object).Count
+      echo "Total User Count: $TotalUserCount"
       $EnabledUserList = $TotalUserList | where {$_.Enabled -eq $true}
       $EnabledUserCount = ($EnabledUserList | Measure-Object).Count
+      echo "Enabled User Count: $EnabledUserCount"
       $DisabledUserList = $TotalUserList | where {$_.Enabled -eq $false}
-      $DisableUserCount = ($TotalUserList | where {$_.Enabled -eq $false | Measure-Object}).Count
+      $DisabledUserCount = ($TotalUserList | where {$_.Enabled -eq $false | Measure-Object}).Count
+      echo "Disabled User Count: $DisabledUserCount"
 
       #Inactive Users (Users who have not authenticated within the last 90, 180, or 365 days) and Stale Passwords (Users who have not changed their password in 90, 180, or 365 days)
       $ActivityPeriods = 90, 180, 365
 
       foreach ($Period in $ActivityPeriods) {
-        $InactiveUsersList = ($EnabledUserList | where { ($_.LastLogonDate -lt (Get-Date).AddDays(-$Period)) } )
-        Set-Variable -Name $Period'DaysInactiveUsers' -Value $InactiveUsersList
-        Set-Variable -Name $Period'DaysInactiveCount' -Value ($InactiveUsersList | MeasureObject).Count
+        $InactiveUserList = ($EnabledUserList | where { ($_.LastLogonDate -lt (Get-Date).AddDays(-$Period)) } )
+        $InactiveUserCount = ($InactiveUserList | Measure-Object).Count
+        echo "Number of users that have not logged in for $Period days: $InactiveUserCount"
+        if ($InactiveUserCount -gt 0) {
+          $filename = $outpath + $Period + "DaysInactive"
+          $InactiveUserList | ConvertTo-Csv | Out-File $filename
+        }
 
         $StalePasswordList = ($EnabledUserList | Where-Object { ($_.WhenCreated -lt (Get-Date).AddDays( -$InactiveDays )) -and ($_.passwordLastSet -lt (Get-Date).AddDays( -$InactiveDays )) } )
-        Set-Variable -Name $Period'DaysStalePasswordUsers' -Value $StalePasswordList
-        Set-Variable -Name $Period'DaysStalePasswordCount' -Value ($StalePasswordList | Measure-Object).Count
+        $StalePasswordCount = ($StalePasswordList | Measure-Object).Count
+        echo "Number of users that have not changed their password for $Period days: $StalePasswordCount"
+        if ($StalePasswordCount -gt 0) {
+          $filename = $outpath + "\" + $Period + "DaysNoPassChange"
+          $InactiveUserList | ConvertTo-Csv | Out-File $filename
+        }
       }
 
       #Members of sensitive groups
       $SensitiveGroups = "administrators", "Domain Admins", "Schema Admins", "Enterprise Admins"
 
       foreach ($SensitiveGroup in $SensitiveGroups) {
+        $MemberCount = 0
+        $Members = ""
+
         $Members = (Get-ADGroupMember -Recursive -Identity $SensitiveGroup | Get-ADUser -Properties * | select Name, DistinguishedName, Enabled, whenCreated, whenChanged, LastLogonDate, PasswordLastSet, PasswordNeverExpires, PasswordNotRequired,@{Name="Group Membership"; Expression = {Get-ADPrincipalGroupMembership $_.DistinguishedName | select Name | convertto-csv -NoTypeInformation | select -Skip 1}})
+        $MemberCount = ($Members | Measure-Object).Count
+        echo "Number of members in the $SensitiveGroup group: $MemberCount"
         $SensitiveGroup.replace(' ', '-')
-        Set-Variable -Name $SensitiveGroup'GroupMembers' -Value $Members
-        Set-Variable -Name $SensitiveGroup'MemberCount' -Value ($Members | Measure-Object).Count
+        if ($MemberCount -gt 0) {
+          $filename = $outpath + "\" + $SensitiveGroup + "Members"
+          $Members | ConvertTo-Csv | Out-File $filename
+        }
       }
 
       #Members of all non-builtin groups
       $CustomGroups = (Get-ADGroup -Filter { GroupCategory -eq "Security" -and GroupScope -eq "Global"  } -Properties isCriticalSystemObject | Where-Object { !($_.IsCriticalSystemObject)})
       $CustomGroupCount = ($CustomGroups | Measure-Object).Count
-      $GroupNames = @()
+      echo "Number of custom groups: $CustomGroupCount"
 
       $invalidChars = [io.path]::GetInvalidFileNameChars()
       foreach ($Group in $CustomGroups) {
           $GroupMembers = $null
+          $MemberCount = $null
           $filename = $null
+
           $GroupMembers = (Get-ADGroupMember -Identity $Group.DistinguishedName | select distinguishedname, name,@{Name="Group Membership"; Expression = {Get-ADPrincipalGroupMembership $_.DistinguishedName | select Name | convertto-csv -NoTypeInformation | select -Skip 1}})
-          if (($GroupMembers | Measure-Object).Count -gt 0) {
-              $GroupNames += $Group.Name
-              $filename = (($Group.Name).ToString() -replace "[$invalidChars]","-") + ".csv"
-              $GroupMembers | ConvertTo-Csv | Out-File "$PSScriptRoot\$filename"
+          $MemberCount = ($GroupMembers | Measure-Obect).Count
+          if ($MemberCount -gt 0) {
+              $filename = $outpath + "\" + (($Group.Name).ToString() -replace "[$invalidChars]","-") + "Members" + ".csv"
+              $GroupMembers | ConvertTo-Csv | Out-File $filename
           }
       }
 
       #Enabled users with password which never expires
-      $PasswordNeverExpiresList = ($TotalUserList | where {PasswordNeverExpires -eq $true -and Enabled -eq $true})
+      $PasswordNeverExpiresList = ($EnabledUserList | where {$_.PasswordNeverExpires -eq $true -and $_.Enabled -eq $true})
       $PasswordNeverExpires = ($PasswordNeverExpiresList| Measure-Object).Count
+      echo "Number of users whose password never expires: $PasswordNeverExpires"
+      if ($PasswordNeverExpires -gt 0) {
+          $filename = $outpath + "\" + "PassNeverExpiresUsers" + ".csv"
+          $PasswordNeverExpiresList | ConvertTo-Csv | Out-File $filename
+      }
 
       #Enabled users with password which was never set
       $PasswordNeverSetList = $EnabledUserList | where { ($_.PasswordLastSet -eq $null) -and ($_.Created -lt (Get-Date).AddDays( -14 )) }
       $PasswordNeverSet = ($PasswordNeverSetList | Measure-Object).Count
+      echo "Number of users whose password was never set: $PasswordNeverSet"
+      if ($PasswordNeverSet -gt 0) {
+          $filename = $outpath + "\" + "PassNeverSetUsers" + ".csv"
+          $PasswordNeverSetList | ConvertTo-Csv | Out-File $filename
+      }
 
       #Enabled users with no password required
       $PasswordNotRequiredList = ($EnabledUserList | where {$_.PasswordNotRequired -eq $true})
       $PasswordNotRequiredCount = ( $PasswordNotRequiredList | Measure-Object).Count
-
+      echo "Number of users with no password required: $PasswordNotRequiredCount"
+      if ($PasswordNotRequiredCount -gt 0) {
+          $filename = $outpath + "\" + "PassNotRequiredUsers" + ".csv"
+          $PasswordNotRequiredList | ConvertTo-Csv | Out-File $filename
+      }
 
       $adAuditResults = [PSCustomObject]@{
           NetBIOSName = $NetBIOSName

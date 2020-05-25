@@ -110,7 +110,7 @@ if ($EnabledUserCount -gt 0) {
   $EnabledUserList | ConvertTo-Csv | Out-File $filename
 }
 $DisabledUserList = $TotalUserList | Where-Object {$_.Enabled -eq $false}
-$DisabledUserCount = ($TotalUserList | Where-Object {$_.Enabled -eq $false | Measure-Object}).Count
+$DisabledUserCount = ($DisabledUserList | Measure-Object).Count
 Write-Output "Disabled User Count: $DisabledUserCount"
 if ($DisabledUserCount -gt 0) {
   $filename = $outpath + "\" + "DisabledUsers.csv"

@@ -72,21 +72,15 @@ function AuditAD() {
       Write-Output "-------------------------------------------------"  
 
       $ADDomain = Get-ADDomain
-      $ADDomain  
-      $NetBIOSName = ($ADDomain | Select-Object NetBIOSName).NetBIOSName
-      Write-Output "NetBIOSName: $NetBIOSName"  
-      $DNSRoot = ($ADDomain | Select-Object DNSRoot).DNSRoot
-      Write-Output "DNSRoot: $DNSRoot"  
-      $Forest = ($ADDomain | Select-Object Forest).Forest
-      Write-Output "AD Forest: $Forest"  
-      $ADFunctionalLevel = ($ADDomain | Select-Object DomainMode).DomainMode.ToString()
-      Write-Output "AD Functional Level: $ADFunctionalLevel"  
-      $ADRootDSE = Get-ADRootDSE
+      $ADDomain
+      Write-Output "NetBIOSName: $(($ADDomain | Select-Object NetBIOSName).NetBIOSName)"  
+      Write-Output "DNSRoot: $(($ADDomain | Select-Object DNSRoot).DNSRoot)"  
+      Write-Output "AD Forest: $(($ADDomain | Select-Object Forest).Forest)"  
+      Write-Output "AD Functional Level: $(($ADDomain | Select-Object DomainMode).DomainMode.ToString())"  
       Write-Output "Root of directory information server tree:"  
-      $ADRootDSE
-      $ADTrust = Get-ADTrust -Filter *
+      Get-ADRootDSE
       Write-Output "List of trusted objects for the domain:"
-      $ADTrust
+      Get-ADTrust -Filter *
 
 
       #Password and Group Policies
@@ -95,8 +89,6 @@ function AuditAD() {
       Write-Output "-------------------------------------------------"  
       Write-Output "Default Domain Password Policy: "  
       Get-ADDefaultDomainPasswordPolicy
-      Write-Output "Password Policy for the Current User: "  
-      Get-ADUserResultantPasswordPolicy -Identity $("$env:USERNAME")
       Get-GPOReport -All -ReportType HTML -Path "$outpath\GPOReportsAll.html"
       Get-GPOReport -All -ReportType XML -Path "$outpath\GPOReportsAll.xml"
       Write-Output "Group policies exported to $outpath\GPOReportsAll.html."
@@ -108,12 +100,24 @@ function AuditAD() {
       $TotalUserList = Get-ADUser -filter *
       $TotalUserCount = ($TotalUserList | Measure-Object).Count
       Write-Output "Total User Count: $TotalUserCount"
+      if ($TotalUserCount -gt 0) {
+        $filename = $outpath + "\" + "AllUsers.csv"
+        $TotalUserList | ConvertTo-Csv | Out-File $filename
+      }
       $EnabledUserList = $TotalUserList | Where-Object {$_.Enabled -eq $true}
       $EnabledUserCount = ($EnabledUserList | Measure-Object).Count
       Write-Output "Enabled User Count: $EnabledUserCount"
+      if ($EnabledUserCount -gt 0) {
+        $filename = $outpath + "\" + "EnabledUsers.csv"
+        $EnabledUserList | ConvertTo-Csv | Out-File $filename
+      }
       $DisabledUserList = $TotalUserList | Where-Object {$_.Enabled -eq $false}
       $DisabledUserCount = ($TotalUserList | Where-Object {$_.Enabled -eq $false | Measure-Object}).Count
       Write-Output "Disabled User Count: $DisabledUserCount"
+      if ($DisabledUserCount -gt 0) {
+        $filename = $outpath + "\" + "DisabledUsers.csv"
+        $DisabledUserList | ConvertTo-Csv | Out-File $filename
+      }
 
       #Inactive Users (Users who have not authenticated within the last 90, 180, or 365 days) and Stale Passwords (Users who have not changed their password in 90, 180, or 365 days)
       $ActivityPeriods = 90, 180, 365
@@ -123,16 +127,16 @@ function AuditAD() {
         $InactiveUserCount = ($InactiveUserList | Measure-Object).Count
         Write-Output "Number of users that have not logged in for $Period days: $InactiveUserCount"
         if ($InactiveUserCount -gt 0) {
-          $filename = $outpath + $Period + "DaysInactive"
+          $filename = $outpath + "\" + $Period + "DaysInactive.csv"
           $InactiveUserList | ConvertTo-Csv | Out-File $filename
         }
 
-        $StalePasswordList = ($EnabledUserList | Where-Object { ($_.WhenCreated -lt (Get-Date).AddDays( -$InactiveDays )) -and ($_.passwordLastSet -lt (Get-Date).AddDays( -$InactiveDays )) } )
+        $StalePasswordList = ($EnabledUserList | Where-Object { ($_.WhenCreated -lt (Get-Date).AddDays( -$Period )) -and ($_.passwordLastSet -lt (Get-Date).AddDays( -$Period )) } )
         $StalePasswordCount = ($StalePasswordList | Measure-Object).Count
         Write-Output "Number of users that have not changed their password for $Period days: $StalePasswordCount"
         if ($StalePasswordCount -gt 0) {
-          $filename = $outpath + "\" + $Period + "DaysNoPassChange"
-          $InactiveUserList | ConvertTo-Csv | Out-File $filename
+          $filename = $outpath + "\" + $Period + "DaysNoPassChange.csv"
+          $StalePasswordList | ConvertTo-Csv | Out-File $filename
         }
       }
 
@@ -146,9 +150,8 @@ function AuditAD() {
         $Members = (Get-ADGroupMember -Recursive -Identity $SensitiveGroup | Get-ADUser -Properties * | Select-Object Name, DistinguishedName, Enabled, whenCreated, whenChanged, LastLogonDate, PasswordLastSet, PasswordNeverExpires, PasswordNotRequired,@{Name="Group Membership"; Expression = {Get-ADPrincipalGroupMembership $_.DistinguishedName | Select-Object Name | convertto-csv -NoTypeInformation | Select-Object -Skip 1}})
         $MemberCount = ($Members | Measure-Object).Count
         Write-Output "Number of members in the $SensitiveGroup group: $MemberCount"
-        $SensitiveGroup.replace(' ', '-')
         if ($MemberCount -gt 0) {
-          $filename = $outpath + "\" + $SensitiveGroup + "Members"
+          $filename = $outpath + "\" + $SensitiveGroup.replace(' ', '-') + "Members.csv"
           $Members | ConvertTo-Csv | Out-File $filename
         }
       }
@@ -157,7 +160,6 @@ function AuditAD() {
       $CustomGroups = (Get-ADGroup -Filter { GroupCategory -eq "Security" -and GroupScope -eq "Global"  } -Properties isCriticalSystemObject | Where-Object { !($_.IsCriticalSystemObject)})
       $CustomGroupCount = ($CustomGroups | Measure-Object).Count
       Write-Output "Number of custom groups: $CustomGroupCount"
-
       $invalidChars = [io.path]::GetInvalidFileNameChars()
       foreach ($Group in $CustomGroups) {
           $GroupMembers = $null
@@ -165,7 +167,8 @@ function AuditAD() {
           $filename = $null
 
           $GroupMembers = (Get-ADGroupMember -Identity $Group.DistinguishedName | Select-Object distinguishedname, name,@{Name="Group Membership"; Expression = {Get-ADPrincipalGroupMembership $_.DistinguishedName | Select-Object Name | convertto-csv -NoTypeInformation | Select-Object -Skip 1}})
-          $MemberCount = ($GroupMembers | Measure-Obect).Count
+          $MemberCount = ($GroupMembers | Measure-Object).Count
+          Write-Output "Number of members in the $($Group.Name) group: $MemberCount"
           if ($MemberCount -gt 0) {
               $filename = $outpath + "\" + (($Group.Name).ToString() -replace "[$invalidChars]","-") + "Members" + ".csv"
               $GroupMembers | ConvertTo-Csv | Out-File $filename
@@ -174,18 +177,18 @@ function AuditAD() {
 
       #Enabled users with password which never expires
       $PasswordNeverExpiresList = ($EnabledUserList | Where-Object {$_.PasswordNeverExpires -eq $true -and $_.Enabled -eq $true})
-      $PasswordNeverExpires = ($PasswordNeverExpiresList| Measure-Object).Count
-      Write-Output "Number of users whose password never expires: $PasswordNeverExpires"
-      if ($PasswordNeverExpires -gt 0) {
+      $PasswordNeverExpiresCount = ($PasswordNeverExpiresList| Measure-Object).Count
+      Write-Output "Number of users whose password never expires: $PasswordNeverExpiresCount"
+      if ($PasswordNeverExpiresCount -gt 0) {
           $filename = $outpath + "\" + "PassNeverExpiresUsers" + ".csv"
           $PasswordNeverExpiresList | ConvertTo-Csv | Out-File $filename
       }
 
       #Enabled users with password which was never set
       $PasswordNeverSetList = $EnabledUserList | Where-Object { ($_.PasswordLastSet -eq $null) -and ($_.Created -lt (Get-Date).AddDays( -14 )) }
-      $PasswordNeverSet = ($PasswordNeverSetList | Measure-Object).Count
-      Write-Output "Number of users whose password was never set: $PasswordNeverSet"
-      if ($PasswordNeverSet -gt 0) {
+      $PasswordNeverSetCount = ($PasswordNeverSetList | Measure-Object).Count
+      Write-Output "Number of users whose password was never set: $PasswordNeverSetCount"
+      if ($PasswordNeverSetCount -gt 0) {
           $filename = $outpath + "\" + "PassNeverSetUsers" + ".csv"
           $PasswordNeverSetList | ConvertTo-Csv | Out-File $filename
       }
@@ -197,65 +200,6 @@ function AuditAD() {
       if ($PasswordNotRequiredCount -gt 0) {
           $filename = $outpath + "\" + "PassNotRequiredUsers" + ".csv"
           $PasswordNotRequiredList | ConvertTo-Csv | Out-File $filename
-      }
-
-      $adAuditResults = [PSCustomObject]@{
-          NetBIOSName = $NetBIOSName
-          DNSRoot = $DNSRoot
-          Forest = $Forest
-          ADFunctionalLevel = $ADFunctionalLevel
-          EnabledUserCount = $EnabledUserCount
-          DisableUserCount = $DisabledUserCount
-          TotalUserCount = $TotalUserCount
-          StalePasswordUsers = $StalePasswordUsers
-          InactiveUsers = $InactiveUsers
-          ActiveUsers = $ActiveUsers
-          DomainAdmins = $DomainAdmins     
-          SchemaAdmins = $SchemaAdmins
-          EnterpriseAdmins = $EnterpriseAdmins
-          CustomGroupCount = $CustomGroupCount
-          CustomGroupNames = $GroupNames
-          PasswordNeverExpires = $PasswordNeverExpires
-          PasswordNeverSet = $PasswordNeverSet     
-          PasswordNotRequired = $PasswordNotRequiredCount
-      }
-
-      #Output the object to the pipeline. The user might want to pipe these results through something like
-      #ConvertTo-CSV or ConvertTo-JSON
-      $adAuditResults
-
-      #For each of the measured objects, if it has >0 members, output it to a CSV in the original script directory
-      if($DisableUserCount -gt 0)
-      {
-        $DisableUserList | ConvertTo-Csv | Out-File "$PSScriptRoot\DisabledUsers.csv"
-      }
-      if( $StalePasswordUsers -gt 0 )
-      {
-        $StalePasswordUsersList | ConvertTo-Csv | Out-File "$PSScriptRoot\StalePasswordUsers.csv"
-      }
-      if( $InactiveUsers -gt 0 )
-      {
-        $InactiveUsersList | ConvertTo-Csv | Out-File "$PSScriptRoot\InactiveUsers.csv"
-      }
-      if( $DomainAdmins -gt 0 )
-      {
-        $DomainAdminsList | ConvertTo-Csv | Out-File "$PSScriptRoot\DomainAdmins.csv"
-      }
-      if( $SchemaAdmins -gt 0 )
-      {
-        $SchemaAdminsList | ConvertTo-Csv | Out-File "$PSScriptRoot\SchemaAdmins.csv"
-      }
-      if( $EnterpriseAdmins -gt 0 )
-      {
-        $EnterpriseAdminsList | ConvertTo-Csv | Out-File "$PSScriptRoot\EnterpriseAdmins.csv"
-      }
-      if( $PasswordNeverExpires -gt 0 )
-      {
-        $PasswordNeverExpiresList | ConvertTo-Csv | Out-File "$PSScriptRoot\NonExpiringPwdUsers.csv"
-      }
-      if( $PasswordNeverSet -gt 0 )
-      {
-        $PasswordNeverSetList | ConvertTo-Csv | Out-File "$PSScriptRoot\PwdNotSetUsers.csv"
       }
 
       #If the alternate connection was used, then get back to the original location and remove the PS drive

@@ -8,3 +8,4 @@ This script is based on AuditorClay's AD audit script (https://github.com/AuditC
 - Remove lots of the unnecessary information from the output. Obviously what's necessary is dependent on the type of engagement, but some information in the script output is clearly unnecessary.
 - Create a better file structure system for the ouput. Currently, all files are dumped into a single folder which hasn't particularly scaled well in our client environments. Some clients have had upwards of 100 custom groups, which means that combing through the results is cumbersome. I'm thinking about changing the output so that there will be a "group membership" folder, "inactive users" folder, etc.
 - Output list of executable files on the machine 
+- indicate whether the script was successfully completed or if there was an error during runtime. could use a try/catch statement or similar.
